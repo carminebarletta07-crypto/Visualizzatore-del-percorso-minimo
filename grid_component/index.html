@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="it"><head><meta charset="UTF-8">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent;overflow:hidden;font-family:sans-serif}
+#viewport{width:100%;overflow-x:auto;overflow-y:hidden;padding:2px 0 12px 2px}
+#grid{display:grid;gap:0;width:max-content;background:#fff;border:10px solid #000;box-sizing:content-box;touch-action:none;user-select:none;-webkit-user-select:none}
+.cell{width:30px;height:30px;min-width:30px;min-height:30px;margin:0;padding:0;border:0;border-right:2px solid #000;border-bottom:2px solid #000;border-radius:0;box-sizing:border-box;background:#fff;cursor:crosshair}
+.cell.last-col{border-right:0}.cell.last-row{border-bottom:0}
+.cell.start{background:#20B94B}.cell.end{background:#E53935}.cell.wall{background:#111}.cell.visited{background:#FFD928}.cell.path{background:#36BDEB}
+</style></head><body>
+<div id="viewport"><div id="grid"></div></div>
+<script>
+(()=>{
+const grid=document.getElementById("grid");
+let args=null,cells=[],down=false,last=null,eventId=0,lastAnimationId=null,timer=null,activePointerId=null;
+let state={start:[1,1],end:[18,28],walls:new Set(),visited:new Set(),path:new Set()};
+const key=(r,c)=>`${r},${c}`;
+const toSet=a=>new Set((a||[]).map(p=>key(+p[0],+p[1])));
+function build(){
+ if(cells.length===args.rows*args.cols)return;
+ grid.innerHTML="";cells=[];grid.style.gridTemplateColumns=`repeat(${args.cols},${args.cell_size||30}px)`;
+ grid.style.gridTemplateRows=`repeat(${args.rows},${args.cell_size||30}px)`;
+ const frag=document.createDocumentFragment();
+ for(let r=0;r<args.rows;r++)for(let c=0;c<args.cols;c++){
+  const el=document.createElement("div");el.className="cell";el.dataset.row=r;el.dataset.col=c;
+  if(c===args.cols-1)el.classList.add("last-col");if(r===args.rows-1)el.classList.add("last-row");
+  frag.appendChild(el);cells.push(el);
+ }grid.appendChild(frag);
+}
+function paint(r,c){
+ const el=cells[r*args.cols+c];if(!el)return;const id=key(r,c);el.className="cell";
+ if(c===args.cols-1)el.classList.add("last-col");if(r===args.rows-1)el.classList.add("last-row");
+ if(r===state.start[0]&&c===state.start[1])el.classList.add("start");
+ else if(r===state.end[0]&&c===state.end[1])el.classList.add("end");
+ else if(state.walls.has(id))el.classList.add("wall");
+ else if(state.path.has(id))el.classList.add("path");
+ else if(state.visited.has(id))el.classList.add("visited");
+}
+function paintAll(){for(let r=0;r<args.rows;r++)for(let c=0;c<args.cols;c++)paint(r,c)}
+function stop(){if(timer!==null){clearTimeout(timer);timer=null}}
+function animate(nodes,path,delay){
+ stop();state.visited=new Set();state.path=new Set();paintAll();let i=0;
+ function step(){
+  if(i<nodes.length){const [r,c]=nodes[i++].map(Number);state.visited.add(key(r,c));paint(r,c);timer=setTimeout(step,delay)}
+  else{state.path=toSet(path);paintAll();timer=null}
+ }step();
+}
+function render(a){
+ args=a;build();state.start=a.start||[1,1];state.end=a.end||[18,28];
+ state.walls=toSet(a.walls);state.visited=toSet(a.visited);state.path=toSet(a.path);paintAll();
+ if(lastAnimationId!==a.animation_id){lastAnimationId=a.animation_id;animate(a.animation_nodes||[],a.animation_path||[],a.speed_ms||15)}
+}
+function send(){
+ window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:setComponentValue",value:{
+ event_id:++eventId,start:state.start,end:state.end,
+ walls:Array.from(state.walls).map(s=>s.split(",").map(Number))
+ },dataType:"json"},"*");
+}
+function act(el){
+ if(!el||!args)return;const r=+el.dataset.row,c=+el.dataset.col,id=key(r,c);if(last===id)return;last=id;
+ stop();state.visited.clear();state.path.clear();
+ if(args.mode==="Disegna ostacoli"){if(!(r===state.start[0]&&c===state.start[1])&&!(r===state.end[0]&&c===state.end[1]))state.walls.add(id)}
+ else if(args.mode==="Cancella ostacoli")state.walls.delete(id);
+ else if(args.mode==="Imposta partenza"){if(!(r===state.end[0]&&c===state.end[1])){state.start=[r,c];state.walls.delete(id)}}
+ else if(args.mode==="Imposta destinazione"){if(!(r===state.start[0]&&c===state.start[1])){state.end=[r,c];state.walls.delete(id)}}
+ paintAll();send();
+}
+grid.addEventListener("pointerdown",e=>{
+ const el=e.target.closest(".cell");
+ if(!el)return;
+ e.preventDefault();
+ last=null;
+ act(el);
+ if(args.mode==="Disegna ostacoli"||args.mode==="Cancella ostacoli"){
+  down=true;
+  activePointerId=e.pointerId;
+  try{grid.setPointerCapture(e.pointerId)}catch(_){}
+ }
+});
+
+// Durante il trascinamento individua la cella realmente sotto il cursore.
+// elementFromPoint funziona anche quando il pointer è catturato dalla griglia.
+grid.addEventListener("pointermove",e=>{
+ if(!down||e.pointerId!==activePointerId)return;
+ e.preventDefault();
+ const el=document.elementFromPoint(e.clientX,e.clientY);
+ const cell=el&&el.closest?el.closest(".cell"):null;
+ if(cell&&grid.contains(cell))act(cell);
+});
+
+function stopDrawing(e){
+ if(activePointerId!==null&&e&&e.pointerId!==undefined&&e.pointerId!==activePointerId)return;
+ down=false;
+ last=null;
+ activePointerId=null;
+}
+window.addEventListener("pointerup",stopDrawing);
+window.addEventListener("pointercancel",stopDrawing);
+window.addEventListener("blur",()=>stopDrawing());
+window.addEventListener("message",e=>{if(e.data&&e.data.type==="streamlit:render")render(e.data.args||{})});
+window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:componentReady",apiVersion:1},"*");
+window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:setFrameHeight",height:650},"*");
+})();
+</script></body></html>
